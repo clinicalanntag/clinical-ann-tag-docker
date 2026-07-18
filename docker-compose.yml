@@ -1,0 +1,60 @@
+services:
+
+  cache-init:
+    image: busybox
+    container_name: clinical-ann-tag-cache-init
+    command: ["sh", "-c", "mkdir -p /cache && chown -R 1000:1000 /cache"]
+    volumes:
+      - huggingface-cache:/cache
+
+  # ── NER Backend (XLM-RoBERTa + FastAPI) ──────────────────────────────────────
+  backend:
+    image: clinicalanntag/clinical-ann-tag-api:latest
+    container_name: clinical-ann-tag-api
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Gated model on Hugging Face Hub — each user needs approved access
+      # and their own token (see secrets/README.md). Can be overridden in
+      # a local .env file next to this one.
+      - MODEL_PATH=${MODEL_PATH:-anvorja/panoncology-biomedical-ner-sp}
+      - HUGGINGFACE_TOKEN_FILE=/run/secrets/hf_token
+    secrets:
+      - hf_token
+    volumes:
+      # Caches model weights across restarts — avoids re-downloading ~2GB
+      - huggingface-cache:/home/appuser/.cache/huggingface
+    depends_on:
+      cache-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  # ── Clinical Annotation Frontend (Next.js) ────────────────────────────────────
+  frontend:
+    image: clinicalanntag/clinical-ann-tag-ui:latest
+    container_name: clinical-ann-tag-web
+    ports:
+      - "3000:3000"
+    environment:
+      # Server-side proxy: Next.js rewrites /api/v1/* → http://backend:8000/api/v1/*
+      - BACKEND_URL=http://backend:8000
+      - NODE_ENV=production
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+# Each user provides their own read-only token in secrets/hf_token.txt
+secrets:
+  hf_token:
+    file: ./secrets/hf_token.txt
+
+volumes:
+  huggingface-cache:

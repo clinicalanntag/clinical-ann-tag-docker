@@ -1,0 +1,3 @@
+# Secrets — nunca versionar
+secrets/hf_token.txt
+.env
